@@ -1,0 +1,5 @@
+export DEEPSPEECH=$HOME/Workspace/speech
+
+export CGO_LDFLAGS="-L$DEEPSPEECH/lib/"
+export CGO_CXXFLAGS="-I$DEEPSPEECH/include/"
+export LD_LIBRARY_PATH=$DEEPSPEECH/lib/
