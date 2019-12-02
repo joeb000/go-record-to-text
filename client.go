@@ -1,10 +1,33 @@
 package main
 
+/*
+  #include <stdio.h>
+  #include <unistd.h>
+  #include <termios.h>
+  char getch(){
+      char ch = 0;
+      struct termios old = {0};
+      fflush(stdout);
+      if( tcgetattr(0, &old) < 0 ) perror("tcsetattr()");
+      old.c_lflag &= ~ICANON;
+      old.c_lflag &= ~ECHO;
+      old.c_cc[VMIN] = 1;
+      old.c_cc[VTIME] = 0;
+      if( tcsetattr(0, TCSANOW, &old) < 0 ) perror("tcsetattr ICANON");
+      if( read(0, &ch,1) < 0 ) perror("read()");
+      old.c_lflag |= ICANON;
+      old.c_lflag |= ECHO;
+      if(tcsetattr(0, TCSADRAIN, &old) < 0) perror("tcsetattr ~ICANON");
+      return ch;
+  }
+*/
+import "C"
 import (
 	"flag"
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gordonklaus/portaudio"
 
@@ -17,6 +40,8 @@ func errCheck(err error) {
 		panic(err)
 	}
 }
+
+const MAX_RUN_TIME_SECONDS = 6
 
 // Constants
 const (
@@ -32,6 +57,8 @@ var model = flag.String("model", "output_graph.pbmm", "File name of the model (p
 var alphabet = flag.String("alphabet", "alphabet.txt", "File name of the configuration file specifying the alphabet used by the network")
 var lm = flag.String("lm", "lm.binary", "File name of the language model binary file")
 var trie = flag.String("trie", "trie", "File name of the language model trie file created with native_client/generate_trie")
+
+var runTime = flag.Int("rt", 0, "Length of time in seconds to listen for audio in before processing")
 
 func addConfigPath(fileName *string) {
 	*fileName = fmt.Sprintf("%v/%v", *configDir, *fileName)
@@ -64,8 +91,7 @@ func main() {
 	}
 
 	// init PortAudio
-	err := portaudio.Initialize()
-	errCheck(err)
+	errCheck(portaudio.Initialize())
 	defer portaudio.Terminate()
 
 	inputChannels := 1
@@ -85,7 +111,7 @@ func main() {
 
 	fmt.Println("RECORDING...")
 
-	numSamples := 2000
+	//numSamples := 2000
 
 	// Make a channel to send samples through
 	c := make(chan []int16, 100)
@@ -111,15 +137,50 @@ func main() {
 
 	}()
 
+	// boolean to use to stop the execution of the main input stream loop
+	breakLoop := false
+
+	// Start goroutine to listen for an input character and send stop signal
+	go func() {
+		key := 0
+		for key != int('q') {
+			key = int(C.getch())
+		}
+		breakLoop = true
+	}()
+
+	// Start goroutine to ensure program stops after the specified run time
+	go func() {
+		time.Sleep(MAX_RUN_TIME_SECONDS * time.Second)
+		breakLoop = true
+	}()
+
+	displayTicker := []string{
+		"-",
+		"\\",
+		"/",
+		"|",
+	}
+	i := 0
 	// important that we minimize operations inside the loop so we don't overflow audio input buffer
-	for ct := 0; ct < numSamples; ct++ {
+	for {
+		i++
+		if i == 80 {
+			i = 0
+		}
+		if breakLoop {
+			break
+		}
+
 		errCheck(stream.Read())
-		//send copy to chan
+
+		// send copy of buffered input to chan for processing
 		copyFPB := make([]int16, len(framesPerBuffer))
 		copy(copyFPB, framesPerBuffer)
 		c <- copyFPB
 
-		fmt.Printf("\r Recording... Say something to your microphone! [%v]  |  len= %v | cap= %v", ct, len(c), cap(c))
+		//fmt.Printf("\rListening... Say something to your microphone!  [%v]  |  len= %v | cap= %v", ct, len(c), cap(c))
+		fmt.Printf("\rListening... Say something to your microphone! (press 'q' to quit) [%v]", displayTicker[i%4])
 
 	}
 
