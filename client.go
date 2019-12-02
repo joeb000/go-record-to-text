@@ -28,37 +28,33 @@ const (
 )
 
 var configDir = flag.String("configDir", "", "Path to config directory for the DeepSpeech Model files")
-
 var model = flag.String("model", "output_graph.pbmm", "File name of the model (protocol buffer binary file)")
 var alphabet = flag.String("alphabet", "alphabet.txt", "File name of the configuration file specifying the alphabet used by the network")
 var lm = flag.String("lm", "lm.binary", "File name of the language model binary file")
 var trie = flag.String("trie", "trie", "File name of the language model trie file created with native_client/generate_trie")
-var version = flag.Bool("version", false, "Print version and exits")
 
 func addConfigPath(fileName *string) {
-	s := *configDir
-	s2 := *fileName
-	*fileName = fmt.Sprintf("%v/%v", s, s2)
+	*fileName = fmt.Sprintf("%v/%v", *configDir, *fileName)
 }
 
-func main() {
+func configureFlags() {
 	flag.Parse()
 
-	if *version {
-		astideepspeech.PrintVersions()
-		return
-	}
-
 	if *configDir == "" {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
+		fmt.Println("No config Directory Specified")
 		flag.PrintDefaults()
-		return
+		os.Exit(0)
 	}
 
 	addConfigPath(model)
 	addConfigPath(alphabet)
 	addConfigPath(lm)
 	addConfigPath(trie)
+}
+
+func main() {
+
+	configureFlags()
 
 	// Initialize DeepSpeech
 	m := astideepspeech.New(*model, nCep, nContext, *alphabet, beamWidth)
@@ -67,52 +63,55 @@ func main() {
 		m.EnableDecoderWithLM(*alphabet, *lm, *trie, lmWeight, validWordCountWeight)
 	}
 
+	// init PortAudio
+	err := portaudio.Initialize()
+	errCheck(err)
+	defer portaudio.Terminate()
+
 	inputChannels := 1
 	outputChannels := 0
 	sampleRate := 16000
 	framesPerBuffer := make([]int16, 64)
 
-	// init PortAudio
-
-	portaudio.Initialize()
-	defer portaudio.Terminate()
-
 	stream, err := portaudio.OpenDefaultStream(inputChannels, outputChannels, float64(sampleRate), len(framesPerBuffer), framesPerBuffer)
+	errCheck(err)
 	defer stream.Close()
 
-	errCheck(err)
-
 	//Set up stream
-	streamData := astideepspeech.SetupStream(m, 0, uint(sampleRate))
+	dsStream := astideepspeech.SetupStream(m, 0, uint(sampleRate))
 
-	// Read
-	//var d []int16
-
-	// start stream
+	// start portaudio input stream
 	errCheck(stream.Start())
 
 	fmt.Println("RECORDING...")
-	numSamples := 1100
-	//Start goroutine to stream audio to deepspeech
+
+	numSamples := 2000
+
+	// Make a channel to send samples through
+	c := make(chan []int16, 100)
+
+	// create wait group
 	var wg sync.WaitGroup
 	wg.Add(1)
-	c := make(chan []int16, numSamples)
-	go func(c chan []int16, s *astideepspeech.Stream, wg *sync.WaitGroup) {
+
+	//Start goroutine to stream audio to deepspeech
+	go func() {
 		defer wg.Done()
-		ct := 0
+
 		for i := range c {
-			ct++
-			//fmt.Printf("i = %v\n", ct)
-			//time.Sleep(10 * time.Millisecond)
-			s.FeedAudioContent(i, uint(len(i)))
+			dsStream.FeedAudioContent(i, uint(len(i)))
 		}
+
 		fmt.Println("\n\nDONE WITH PROCESSING NOW FINISH...")
-		output := s.FinishStream()
+
+		// Call finish stream to get the text output from deepspeech
+		output := dsStream.FinishStream()
 
 		fmt.Printf("\n\nText: %s\n", output)
 
-	}(c, streamData, &wg)
+	}()
 
+	// important that we minimize operations inside the loop so we don't overflow audio input buffer
 	for ct := 0; ct < numSamples; ct++ {
 		errCheck(stream.Read())
 		//send copy to chan
@@ -120,7 +119,7 @@ func main() {
 		copy(copyFPB, framesPerBuffer)
 		c <- copyFPB
 
-		fmt.Printf("\n Recording... Say something to your microphone! [%v]  |  len= %v | cap= %v", ct, len(c), cap(c))
+		fmt.Printf("\r Recording... Say something to your microphone! [%v]  |  len= %v | cap= %v", ct, len(c), cap(c))
 
 	}
 
