@@ -41,7 +41,7 @@ func errCheck(err error) {
 	}
 }
 
-const MAX_RUN_TIME_SECONDS = 6
+const MAX_RUN_TIME_SECONDS = 20
 
 // Constants
 const (
@@ -109,10 +109,6 @@ func main() {
 	// start portaudio input stream
 	errCheck(stream.Start())
 
-	fmt.Println("RECORDING...")
-
-	//numSamples := 2000
-
 	// Make a channel to send samples through
 	c := make(chan []int16, 100)
 
@@ -139,6 +135,7 @@ func main() {
 
 	// boolean to use to stop the execution of the main input stream loop
 	breakLoop := false
+	quit := make(chan bool)
 
 	// Start goroutine to listen for an input character and send stop signal
 	go func() {
@@ -147,11 +144,17 @@ func main() {
 			key = int(C.getch())
 		}
 		breakLoop = true
+		quit <- true
+
 	}()
 
 	// Start goroutine to ensure program stops after the specified run time
 	go func() {
-		time.Sleep(MAX_RUN_TIME_SECONDS * time.Second)
+		timeCap := *runTime
+		if timeCap == 0 {
+			timeCap = MAX_RUN_TIME_SECONDS
+		}
+		time.Sleep(time.Duration(timeCap) * time.Second)
 		breakLoop = true
 	}()
 
@@ -188,4 +191,8 @@ func main() {
 
 	wg.Wait()
 
+	// just so the user's terminal doesn't blow up because of the getCh()
+	fmt.Printf("\nPress 'q' to exit program...")
+	<-quit
+	fmt.Println("Done")
 }
